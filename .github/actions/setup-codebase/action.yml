@@ -1,0 +1,23 @@
+name: "Setup Codebase"
+description: "Configure the codebase for building, and or e2e testing."
+
+inputs:
+  node-version-file:
+    description: Node Version File
+    required: false
+  cache:
+    description: "Used to specify a package manager for caching in the default directory. Supported values: npm, yarn, pnpm"
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version-file: ${{ inputs.node-version-file }}
+        cache: ${{ inputs.cache }}
+    
+    - name: Install Dependencies
+      shell: bash
+      run: npm ci

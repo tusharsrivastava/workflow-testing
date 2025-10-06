@@ -1,0 +1,48 @@
+name: "Setup Bot Identity"
+description: "Configure standardized bot name, email, and git identity for all automated commits."
+
+inputs:
+  bot_name:
+    description: "Bot display name for commit author"
+    required: false
+    default: "github-actions[bot]"
+  bot_email:
+    description: "Email address for commit author"
+    required: false
+    default: "41898282+github-actions[bot]@users.noreply.github.com"
+  enable_signing:
+    description: "Enable commit signing (optional, requires GPG key setup)"
+    required: false
+    default: "false"
+
+outputs:
+  configured_name:
+    description: "The configured bot name"
+    value: ${{ steps.set_identity.outputs.name }}
+  configured_email:
+    description: "The configured bot email"
+    value: ${{ steps.set_identity.outputs.email }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure git identity
+      id: set_identity
+      shell: bash
+      run: |
+        git config --global user.name "${{ inputs.bot_name }}"
+        git config --global user.email "${{ inputs.bot_email }}"
+        echo "Configured bot identity:"
+        echo "  Name:  ${{ inputs.bot_name }}"
+        echo "  Email: ${{ inputs.bot_email }}"
+        echo "name=${{ inputs.bot_name }}" >> $GITHUB_OUTPUT
+        echo "email=${{ inputs.bot_email }}" >> $GITHUB_OUTPUT
+
+    - name: Configure commit signing (optional)
+      if: ${{ inputs.enable_signing == 'true' }}
+      shell: bash
+      run: |
+        echo "Enabling commit signing..."
+        git config --global commit.gpgsign true
+        git config --global gpg.program gpg
+        echo "GPG signing enabled for bot commits."

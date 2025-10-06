@@ -1,0 +1,136 @@
+name: Create / Sync Release Branch
+on:
+  milestone:
+    types: [created]
+
+concurrency:
+  group: create-release-${{ github.event.milestone.title }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write     # needed to push branch/commits
+  issues: read
+  pull-requests: write
+
+jobs:
+  create_or_sync_release:
+    name: Create or rebase release branch
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup standardized bot identity
+        id: bot_identity
+        uses: ./.github/actions/setup-bot-identity
+        with:
+          bot_name: "Github Bot"
+          bot_email: "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Parse milestone title and extract version
+        id: parse
+        shell: bash
+        run: |
+          set -eu
+          # read milestone title from event payload
+          title=$(jq -r .milestone.title "$GITHUB_EVENT_PATH" || echo "")
+          echo "milestone_title=$title" >> $GITHUB_OUTPUT
+
+          if [[ "$title" =~ ^[Rr]elease[[:space:]]+([0-9]+\.[0-9]+)$ ]]; then
+            version="${BASH_REMATCH[1]}"
+            echo "version=$version" >> $GITHUB_OUTPUT
+            echo "matched=true" >> $GITHUB_OUTPUT
+          else
+            echo "matched=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop if milestone is not a Release x.y
+        if: ${{ steps.parse.outputs.matched != 'true' }}
+        run: |
+          echo "Milestone title not in 'Release x.y' format. Exiting."
+          exit 0
+        shell: bash
+
+      - name: Check if release/{version} branch exists on origin
+        id: check_branch
+        shell: bash
+        run: |
+          set -eu
+          version="${{ steps.parse.outputs.version }}"
+          # ensure we have refs
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          if git rev-parse --verify "refs/remotes/origin/release/${version}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Rebase existing release branch onto dev
+        if: ${{ steps.check_branch.outputs.exists == 'true' }}
+        shell: bash
+        run: |
+          set -eux
+          version="${{ steps.parse.outputs.version }}"
+          git fetch origin dev:dev
+          # create local tracking branch for release/version
+          git checkout -B "release/${version}" "origin/release/${version}"
+          # rebase onto latest dev
+          git rebase origin/dev
+          # push rebase (force with lease to reduce overwrite risk)
+          git push --force-with-lease origin "release/${version}"
+
+      - name: Create release branch from dev
+        if: ${{ steps.check_branch.outputs.exists == 'false' }}
+        shell: bash
+        run: |
+          set -eux
+          version="${{ steps.parse.outputs.version }}"
+          git fetch origin dev
+          git checkout -b "release/${version}" "origin/dev"
+          git push -u origin "release/${version}"
+
+      - name: Ensure workspace is on release branch
+        shell: bash
+        run: |
+          set -eu
+          version="${{ steps.parse.outputs.version }}"
+          git checkout "release/${version}"
+
+      - name: Setup Node (for package.json checks)
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+
+      - name: Read package.json version
+        id: pkg
+        shell: bash
+        run: |
+          set -eu
+          # extract semantic version from package.json
+          pkg_version=$(node -p "require('./package.json').version")
+          echo "pkg_version=$pkg_version" >> $GITHUB_OUTPUT
+          major_minor=$(node -p "require('./package.json').version.split('.').slice(0,2).join('.')")
+          echo "pkg_major_minor=$major_minor" >> $GITHUB_OUTPUT
+
+      - name: Bump package.json to x.y.0 if needed
+        if: ${{ steps.pkg.outputs.pkg_major_minor != steps.parse.outputs.version }}
+        shell: bash
+        run: |
+          set -eux
+          target="${{ steps.parse.outputs.version }}.0"
+          echo "Bumping package.json version to $target"
+          # update package.json safely
+          jq --arg v "$target" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
+
+      - name: Commit & push package.json bump (if any)
+        if: ${{ steps.pkg.outputs.pkg_major_minor != steps.parse.outputs.version }}
+        uses: EndBug/add-and-commit@v9
+        with:
+          author_name: ${{ steps.bot_identity.outputs.configured_name }}
+          author_email: ${{ steps.bot_identity.outputs.configured_email }}
+          message: "chore(release): bump version to ${{ steps.parse.outputs.version }}.0"
+          add: "package.json"
+          push: true
