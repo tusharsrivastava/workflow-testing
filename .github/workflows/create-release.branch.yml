@@ -131,6 +131,6 @@ jobs:
         with:
           author_name: ${{ steps.bot_identity.outputs.configured_name }}
           author_email: ${{ steps.bot_identity.outputs.configured_email }}
-          message: "chore(release): bump version to ${{ steps.parse.outputs.version }}.0"
+          message: "chore(release): bump version to ${{ steps.parse.outputs.version }}.0 [skip ci]"
           add: "package.json"
           push: true
